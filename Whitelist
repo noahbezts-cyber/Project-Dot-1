@@ -1,0 +1,413 @@
+
+local WhitelistedHWIDs = {
+    ["DD1162C4-3074-4420-B408-AF65D2C3F3AC"] = true, -- Noah (Whitelisted)
+    ["37696E3F-7407-4C82-A9A6-892A9A6D1793"] = true, -- Friend (Whitelisted)
+}
+
+local HWID = game:GetService("RbxAnalyticsService"):GetClientId()
+
+if not WhitelistedHWIDs[HWID] then
+    -- Copies HWID to clipboard automatically for the user
+    if setclipboard then setclipboard(HWID) end
+    
+    game:GetService("Players").LocalPlayer:Kick("\n[PROJECT DOT - ACCESS DENIED]\n\nYour hardware is not whitelisted.\nHWID: " .. HWID .. "\n(ID has been copied to your clipboard)")
+    return -- Prevents the rest of the script from running
+end
+
+--// SERVICES //--
+local Services = {
+    Players = game:GetService("Players"),
+    RunService = game:GetService("RunService"),
+    UserInputService = game:GetService("UserInputService"),
+    Workspace = game:GetService("Workspace"),
+    CoreGui = game:GetService("CoreGui"),
+    HttpService = game:GetService("HttpService"),
+    ReplicatedStorage = game:GetService("ReplicatedStorage"),
+    VirtualUser = game:GetService("VirtualUser") -- Added for Anti-AFK
+}
+
+repeat task.wait() until game:IsLoaded()
+local LocalPlayer = Services.Players.LocalPlayer
+local Camera = Services.Workspace.CurrentCamera
+local Mouse = LocalPlayer:GetMouse()
+
+local SkeletonR15 = {
+    {"UpperTorso", "LowerTorso"}, {"UpperTorso", "Head"}, {"UpperTorso", "LeftUpperArm"}, {"LeftUpperArm", "LeftLowerArm"}, {"LeftLowerArm", "LeftHand"}, {"UpperTorso", "RightUpperArm"}, {"RightUpperArm", "RightLowerArm"}, {"RightLowerArm", "RightHand"}, {"LowerTorso", "LeftUpperLeg"}, {"LeftUpperLeg", "LeftLowerLeg"}, {"LeftLowerLeg", "LeftFoot"}, {"LowerTorso", "RightUpperLeg"}, {"RightUpperLeg", "RightLowerLeg"}, {"RightLowerLeg", "RightFoot"}
+}
+
+local Settings = {
+    Aimbot = false,
+    AimbotSmoothing = 3,
+    AimbotFOV = 150,
+    FOVColor = Color3.fromRGB(255, 40, 40),
+    AimPart = "Head",
+    Triggerbot = false,
+    MenuKey = Enum.KeyCode.RightShift,
+    Whitelist = {},
+    ESP = {
+        Boxes = false, BoxFill = false, Names = false, Guns = false, Health = false, Chams = false, Distance = false, TargetLine = false, Skeleton = false,
+        Radar = false,
+        FacingLines = false
+    },
+    ESP_Config = {
+        MainColor = Color3.fromRGB(255, 40, 40),
+        PriorityColor = Color3.fromRGB(0, 255, 255),
+        FillTransparency = 0.4,
+        RadarRange = 250
+    },
+    Bypass = {
+        AntiKick = false,
+        AntiFling = false, -- New Setting
+        AntiAFK = false,   -- New Setting
+        ChatBypass = false,
+        SpoofName = false,
+        Invisible = false,
+        ServerHopPersist = false -- New Setting
+    },
+    Watermark = true
+}
+
+--// CONFIG SYSTEM //--
+local ConfigName = "ProjectDotConfig.json"
+
+local function SaveConfig()
+    local Data = {
+        Aimbot = {Smoothing = Settings.AimbotSmoothing, FOV = Settings.AimbotFOV, Part = Settings.AimPart, Trigger = Settings.Triggerbot},
+        ESP = Settings.ESP,
+        Colors = {
+            Main = {Settings.ESP_Config.MainColor.R, Settings.ESP_Config.MainColor.G, Settings.ESP_Config.MainColor.B},
+            Priority = {Settings.ESP_Config.PriorityColor.R, Settings.ESP_Config.PriorityColor.G, Settings.ESP_Config.PriorityColor.B},
+            FOV = {Settings.FOVColor.R, Settings.FOVColor.G, Settings.FOVColor.B}
+        },
+        Transparency = Settings.ESP_Config.FillTransparency,
+        RadarRange = Settings.ESP_Config.RadarRange,
+        Watermark = Settings.Watermark,
+        Bypass = Settings.Bypass
+    }
+    writefile(ConfigName, Services.HttpService:JSONEncode(Data))
+end
+
+local function LoadConfig()
+    if isfile(ConfigName) then
+        local pcallStatus, Data = pcall(function() return Services.HttpService:JSONDecode(readfile(ConfigName)) end)
+        if pcallStatus then
+            Settings.AimbotSmoothing = Data.Aimbot.Smoothing
+            Settings.AimbotFOV = Data.Aimbot.FOV
+            Settings.AimPart = Data.Aimbot.Part
+            Settings.Triggerbot = Data.Aimbot.Trigger or false
+            Settings.ESP = Data.ESP
+            Settings.ESP_Config.MainColor = Color3.new(unpack(Data.Colors.Main))
+            Settings.ESP_Config.PriorityColor = Color3.new(unpack(Data.Colors.Priority))
+            Settings.FOVColor = Color3.new(unpack(Data.Colors.FOV))
+            Settings.ESP_Config.FillTransparency = Data.Transparency
+            Settings.ESP_Config.RadarRange = Data.RadarRange or 250
+            Settings.Watermark = Data.Watermark or true
+            if Data.Bypass then Settings.Bypass = Data.Bypass end
+        end
+    end
+end
+
+--// UTILS //--
+local function CreateDrawing(type, props)
+    local d = Drawing.new(type); for i, v in pairs(props) do d[i] = v end; return d
+end
+
+local FOVCircle = CreateDrawing("Circle", {Thickness = 1.5, Color = Settings.FOVColor, Transparency = 0.8, NumSides = 128, Visible = false})
+local TargetLine = CreateDrawing("Line", {Thickness = 2, Color = Settings.ESP_Config.MainColor, Transparency = 1, Visible = false})
+
+--// WATERMARK //--
+local WatermarkText = CreateDrawing("Text", {
+    Size = 18, Center = false, Outline = true, OutlineColor = Color3.new(0, 0, 0), Color = Color3.new(1, 1, 1), Position = Vector2.new(25, 25), Visible = Settings.Watermark
+})
+
+--// BYPASS LOGIC & HOOKS //--
+
+-- Name Spoofer
+local OriginalName = LocalPlayer.DisplayName
+local FakeNames = {"Player", "Robloxian", "Shadow", "Guest", "Unknown", "IlIlIlIlIl", "Noob", "ElitePVP"}
+local function ToggleNameSpoof(v)
+    if v then LocalPlayer.DisplayName = FakeNames[math.random(1, #FakeNames)] .. "_" .. math.random(100, 999)
+    else LocalPlayer.DisplayName = OriginalName end
+end
+
+-- Anti-Kick (Metamethod Hook)
+pcall(function()
+    local oldNamecall
+    oldNamecall = hookmetamethod(game, "__namecall", function(self, ...)
+        local method = getnamecallmethod()
+        if Settings.Bypass.AntiKick and (method == "Kick" or method == "kick") and self == LocalPlayer then
+            return nil -- Intercepts and blocks the kick
+        end
+        return oldNamecall(self, ...)
+    end)
+end)
+
+-- Anti-AFK
+LocalPlayer.Idled:Connect(function()
+    if Settings.Bypass.AntiAFK then
+        Services.VirtualUser:Button2Down(Vector2.new(0,0), Camera.CFrame)
+        task.wait(1)
+        Services.VirtualUser:Button2Up(Vector2.new(0,0), Camera.CFrame)
+    end
+end)
+
+-- Server Hop / Auto-Execute
+local function HandleServerHop(v)
+    if v then
+        local queueteleport = queue_on_teleport or (syn and syn.queue_on_teleport) or (fluxus and fluxus.queue_on_teleport)
+        if queueteleport then
+            queueteleport([[
+                repeat task.wait() until game:IsLoaded()
+                loadstring(game:HttpGet("YOUR_RAW_SCRIPT_URL_HERE"))()
+            ]])
+        end
+    end
+end
+
+-- Invisible Bypass Loop
+task.spawn(function()
+    while task.wait() do
+        if Settings.Bypass.Invisible and LocalPlayer.Character then
+            local char = LocalPlayer.Character
+            for _, v in pairs(char:GetChildren()) do
+                if v:IsA("BasePart") and v.Name ~= "HumanoidRootPart" then v.Transparency = 1 end
+                if v:IsA("Accessory") and v:FindFirstChild("Handle") then v.Handle.Transparency = 1 end
+            end
+        elseif LocalPlayer.Character then
+             for _, v in pairs(LocalPlayer.Character:GetChildren()) do
+                if v:IsA("BasePart") and v.Name ~= "HumanoidRootPart" then v.Transparency = 0 end
+                if v:IsA("Accessory") and v:FindFirstChild("Handle") then v.Handle.Transparency = 0 end
+            end
+        end
+    end
+end)
+
+--// UI FRAMEWORK //--
+local ScreenGui = Instance.new("ScreenGui", Services.CoreGui)
+local MainFrame = Instance.new("Frame", ScreenGui)
+MainFrame.Size = UDim2.new(0, 600, 0, 480); MainFrame.Position = UDim2.new(0.5, -300, 0.5, -240); MainFrame.BackgroundColor3 = Color3.fromRGB(15, 15, 15); MainFrame.BorderSizePixel = 0; Instance.new("UICorner", MainFrame).CornerRadius = UDim.new(0, 10)
+MainFrame.Visible = false
+
+--// RADAR UI SETUP //--
+local RadarFrame = Instance.new("Frame", ScreenGui)
+RadarFrame.Name = "Radar"; RadarFrame.Size = UDim2.new(0, 160, 0, 160); RadarFrame.Position = UDim2.new(0, 20, 0, 20); RadarFrame.BackgroundColor3 = Color3.fromRGB(10, 10, 10); RadarFrame.BackgroundTransparency = 0.3; RadarFrame.Visible = false
+local RadarCorner = Instance.new("UICorner", RadarFrame); RadarCorner.CornerRadius = UDim.new(1, 0)
+local RadarBorder = Instance.new("UIStroke", RadarFrame); RadarBorder.Color = Settings.ESP_Config.MainColor; RadarBorder.Thickness = 1.5
+local RadarCenter = Instance.new("Frame", RadarFrame)
+RadarCenter.Size = UDim2.new(0, 4, 0, 4); RadarCenter.Position = UDim2.new(0.5, -2, 0.5, -2); RadarCenter.BackgroundColor3 = Color3.new(1, 1, 1); Instance.new("UICorner", RadarCenter)
+local RadarDots = {}; local RadarLines = {}
+
+local Title = Instance.new("TextLabel", MainFrame)
+Title.Text = "PROJECT <font color='#FF2828'>DOT</font> PVP Menu"; Title.RichText = true; Title.Size = UDim2.new(1, 0, 0, 60); Title.Font = Enum.Font.GothamBold; Title.TextColor3 = Color3.new(1,1,1); Title.TextSize = 22; Title.BackgroundTransparency = 1
+
+local Sidebar = Instance.new("Frame", MainFrame)
+Sidebar.Size = UDim2.new(0, 150, 1, -80); Sidebar.Position = UDim2.new(0, 15, 0, 65); Sidebar.BackgroundColor3 = Color3.fromRGB(20, 20, 20); Instance.new("UICorner", Sidebar)
+
+local TabContainer = Instance.new("Frame", MainFrame)
+TabContainer.Size = UDim2.new(1, -190, 1, -80); TabContainer.Position = UDim2.new(0, 175, 0, 65); TabContainer.BackgroundTransparency = 1
+
+local Tabs = { Combat = Instance.new("ScrollingFrame", TabContainer), Visuals = Instance.new("ScrollingFrame", TabContainer), Whitelist = Instance.new("ScrollingFrame", TabContainer), Bypass = Instance.new("ScrollingFrame", TabContainer), Customize = Instance.new("ScrollingFrame", TabContainer) }
+
+for _, frame in pairs(Tabs) do
+    frame.Size = UDim2.new(1, 0, 1, 0); frame.BackgroundTransparency = 1; frame.Visible = false; frame.ScrollBarThickness = 2
+    frame.CanvasSize = UDim2.new(0,0,0,0); frame.AutomaticCanvasSize = Enum.AutomaticSize.Y
+    local Layout = Instance.new("UIListLayout", frame); Layout.Padding = UDim.new(0, 8); Layout.SortOrder = Enum.SortOrder.LayoutOrder
+end
+Tabs.Combat.Visible = true
+
+--// UI BUILDERS //--
+function CreateTabBtn(name, targetFrame)
+    local Btn = Instance.new("TextButton", Sidebar); Btn.Size = UDim2.new(1, -20, 0, 35); Btn.Position = UDim2.new(0, 10, 0, (#Sidebar:GetChildren() * 42) - 35); Btn.BackgroundColor3 = Color3.fromRGB(28, 28, 28); Btn.Text = name; Btn.TextColor3 = Color3.new(0.7,0.7,0.7); Btn.Font = Enum.Font.GothamBold; Btn.TextSize = 11; Instance.new("UICorner", Btn)
+    Btn.MouseButton1Click:Connect(function() for _, f in pairs(Tabs) do f.Visible = false end; targetFrame.Visible = true end)
+end
+
+local function AddToggle(parent, text, default, callback)
+    local Frame = Instance.new("Frame", parent); Frame.Size = UDim2.new(1, -5, 0, 42); Frame.BackgroundColor3 = Color3.fromRGB(25, 25, 25); Instance.new("UICorner", Frame)
+    local Btn = Instance.new("TextButton", Frame); Btn.Size = UDim2.new(0, 36, 0, 18); Btn.Position = UDim2.new(1, -50, 0.5, -9); Btn.BackgroundColor3 = default and Settings.ESP_Config.MainColor or Color3.fromRGB(45, 45, 45); Btn.Text = ""; Instance.new("UICorner", Btn).CornerRadius = UDim.new(1, 0)
+    local Label = Instance.new("TextLabel", Frame); Label.Text = text; Label.Size = UDim2.new(1, -60, 1, 0); Label.Position = UDim2.new(0, 15, 0, 0); Label.BackgroundTransparency = 1; Label.TextColor3 = Color3.new(0.9,0.9,0.9); Label.TextXAlignment = 0; Label.Font = Enum.Font.Gotham; Label.TextSize = 13
+    Btn.MouseButton1Click:Connect(function() default = not default; Btn.BackgroundColor3 = default and Settings.ESP_Config.MainColor or Color3.fromRGB(45,45,45); callback(default) end)
+end
+
+local function AddSlider(parent, text, min, max, default, callback)
+    local Frame = Instance.new("Frame", parent); Frame.Size = UDim2.new(1, -5, 0, 65); Frame.BackgroundColor3 = Color3.fromRGB(22, 22, 22); Instance.new("UICorner", Frame)
+    local Label = Instance.new("TextLabel", Frame); Label.Text = text .. ": " .. default; Label.Size = UDim2.new(1, 0, 0, 25); Label.Position = UDim2.new(0, 15, 0, 8); Label.BackgroundTransparency = 1; Label.TextColor3 = Color3.new(0.8,0.8,0.8); Label.TextXAlignment = 0; Label.Font = Enum.Font.Gotham; Label.TextSize = 13
+    local SliderBG = Instance.new("Frame", Frame); SliderBG.Size = UDim2.new(1, -30, 0, 10); SliderBG.Position = UDim2.new(0, 15, 0, 40); SliderBG.BackgroundColor3 = Color3.fromRGB(35, 35, 35); SliderBG.BorderSizePixel = 0
+    Instance.new("UICorner", SliderBG).CornerRadius = UDim.new(0, 4)
+    local Fill = Instance.new("Frame", SliderBG); Fill.Size = UDim2.new((default-min)/(max-min), 0, 1, 0); Fill.BackgroundColor3 = Settings.ESP_Config.MainColor; Fill.BorderSizePixel = 0
+    Instance.new("UICorner", Fill).CornerRadius = UDim.new(0, 4)
+    local Knob = Instance.new("Frame", Fill); Knob.Size = UDim2.new(0, 16, 0, 16); Knob.Position = UDim2.new(1, -8, 0.5, -8); Knob.BackgroundColor3 = Color3.new(1, 1, 1); Knob.BorderSizePixel = 0
+    Instance.new("UICorner", Knob).CornerRadius = UDim.new(1, 0)
+    SliderBG.InputBegan:Connect(function(input)
+        if input.UserInputType == Enum.UserInputType.MouseButton1 then
+            local con; con = Services.RunService.RenderStepped:Connect(function()
+                local p = math.clamp((Services.UserInputService:GetMouseLocation().X - SliderBG.AbsolutePosition.X) / SliderBG.AbsoluteSize.X, 0, 1)
+                Fill.Size = UDim2.new(p, 0, 1, 0); local val = min + (max - min) * p; if max > 1 then val = math.floor(val) else val = math.round(val * 100) / 100 end
+                Label.Text = text .. ": " .. val; callback(val)
+                if not Services.UserInputService:IsMouseButtonPressed(Enum.UserInputType.MouseButton1) then con:Disconnect() end
+            end)
+        end
+    end)
+end
+
+local function AddSelector(parent, text, options, default, callback)
+    local Frame = Instance.new("Frame", parent); Frame.Size = UDim2.new(1, -5, 0, 42); Frame.BackgroundColor3 = Color3.fromRGB(25, 25, 25); Instance.new("UICorner", Frame)
+    local Label = Instance.new("TextLabel", Frame); Label.Text = text; Label.Size = UDim2.new(1, -120, 1, 0); Label.Position = UDim2.new(0, 15, 0, 0); Label.BackgroundTransparency = 1; Label.TextColor3 = Color3.new(0.9,0.9,0.9); Label.TextXAlignment = 0; Label.Font = Enum.Font.Gotham; Label.TextSize = 13
+    local Btn = Instance.new("TextButton", Frame); Btn.Size = UDim2.new(0, 100, 0, 25); Btn.Position = UDim2.new(1, -115, 0.5, -12); Btn.BackgroundColor3 = Color3.fromRGB(40, 40, 40); Btn.Text = default; Btn.TextColor3 = Color3.new(1,1,1); Btn.Font = Enum.Font.Gotham; Btn.TextSize = 11; Instance.new("UICorner", Btn)
+    local index = table.find(options, default) or 1
+    Btn.MouseButton1Click:Connect(function() index = (index % #options) + 1; Btn.Text = options[index]; callback(options[index]) end)
+end
+
+local function AddColorPicker(parent, text, default, callback)
+    local Frame = Instance.new("Frame", parent); Frame.Size = UDim2.new(1, -5, 0, 42); Frame.BackgroundColor3 = Color3.fromRGB(25, 25, 25); Instance.new("UICorner", Frame)
+    local Label = Instance.new("TextLabel", Frame); Label.Text = text; Label.Size = UDim2.new(1, -60, 1, 0); Label.Position = UDim2.new(0, 15, 0, 0); Label.BackgroundTransparency = 1; Label.TextColor3 = Color3.new(0.9,0.9,0.9); Label.TextXAlignment = 0; Label.Font = Enum.Font.Gotham; Label.TextSize = 13
+    local ColorDisplay = Instance.new("TextButton", Frame); ColorDisplay.Size = UDim2.new(0, 40, 0, 20); ColorDisplay.Position = UDim2.new(1, -55, 0.5, -10); ColorDisplay.BackgroundColor3 = default; ColorDisplay.Text = ""; Instance.new("UICorner", ColorDisplay)
+    ColorDisplay.MouseButton1Click:Connect(function() local h, s, v = ColorDisplay.BackgroundColor3:ToHSV(); h = (h + 0.1) % 1; local newCol = Color3.fromHSV(h, s, v); ColorDisplay.BackgroundColor3 = newCol; callback(newCol) end)
+end
+
+local function AddButton(parent, text, callback)
+    local Btn = Instance.new("TextButton", parent); Btn.Size = UDim2.new(1, -5, 0, 35); Btn.BackgroundColor3 = Color3.fromRGB(30, 30, 30); Btn.Text = text; Btn.TextColor3 = Color3.new(1,1,1); Btn.Font = Enum.Font.GothamBold; Btn.TextSize = 12; Instance.new("UICorner", Btn)
+    Btn.MouseButton1Click:Connect(callback)
+end
+
+--// COMBAT LOGIC //--
+local function GetClosestPlayer()
+    local closest, dist = nil, Settings.AimbotFOV
+    for _, p in pairs(Services.Players:GetPlayers()) do
+        local pData = Settings.Whitelist[p.Name]
+        if p ~= LocalPlayer and p.Character and (not pData or not pData.Whitelisted) then
+            local targetPart = Settings.AimPart
+            local part = p.Character:FindFirstChild(targetPart == "Random" and "Head" or targetPart)
+            if part then
+                local pos, on = Camera:WorldToViewportPoint(part.Position)
+                if on and p.Character:FindFirstChild("Humanoid") and p.Character.Humanoid.Health > 0 then
+                    local mag = (Vector2.new(pos.X, pos.Y) - Services.UserInputService:GetMouseLocation()).Magnitude
+                    if mag < dist then dist = mag; closest = p end
+                end
+            end
+        end
+    end
+    return closest
+end
+
+--// WHITELIST LOGIC //--
+local HeaderFrame = Instance.new("Frame", Tabs.Whitelist); HeaderFrame.Size = UDim2.new(1, -5, 0, 35); HeaderFrame.BackgroundTransparency = 1; HeaderFrame.LayoutOrder = -1
+local SearchFrame = Instance.new("Frame", HeaderFrame); SearchFrame.Size = UDim2.new(1, -110, 1, 0); SearchFrame.BackgroundColor3 = Color3.fromRGB(30, 30, 30); Instance.new("UICorner", SearchFrame)
+local SearchBox = Instance.new("TextBox", SearchFrame); SearchBox.Size = UDim2.new(1, -20, 1, 0); SearchBox.Position = UDim2.new(0, 10, 0, 0); SearchBox.BackgroundTransparency = 1; SearchBox.PlaceholderText = "Search Player..."; SearchBox.Text = ""; SearchBox.TextColor3 = Color3.new(1,1,1); SearchBox.Font = Enum.Font.Gotham; SearchBox.TextSize = 13; SearchBox.TextXAlignment = 0
+local ClearBtn = Instance.new("TextButton", HeaderFrame); ClearBtn.Size = UDim2.new(0, 100, 1, 0); ClearBtn.Position = UDim2.new(1, -100, 0, 0); ClearBtn.BackgroundColor3 = Color3.fromRGB(255, 40, 40); ClearBtn.Text = "Clear All"; ClearBtn.TextColor3 = Color3.new(1,1,1); ClearBtn.Font = Enum.Font.GothamBold; ClearBtn.TextSize = 12; Instance.new("UICorner", ClearBtn)
+
+local function UpdateWhitelistTab()
+    for _, child in pairs(Tabs.Whitelist:GetChildren()) do if child:IsA("Frame") and child ~= HeaderFrame then child:Destroy() end end
+    local searchText = SearchBox.Text:lower()
+    for _, player in pairs(Services.Players:GetPlayers()) do
+        if player == LocalPlayer then continue end
+        if searchText ~= "" and not player.Name:lower():find(searchText) then continue end
+        local PlayerFrame = Instance.new("Frame", Tabs.Whitelist); PlayerFrame.Size = UDim2.new(1, -5, 0, 45); PlayerFrame.BackgroundColor3 = Color3.fromRGB(22, 22, 22); Instance.new("UICorner", PlayerFrame)
+        local NameLabel = Instance.new("TextLabel", PlayerFrame); NameLabel.Text = player.Name; NameLabel.Size = UDim2.new(1, -190, 1, 0); NameLabel.Position = UDim2.new(0, 15, 0, 0); NameLabel.BackgroundTransparency = 1; NameLabel.TextColor3 = Color3.new(0.9,0.9,0.9); NameLabel.Font = Enum.Font.Gotham; NameLabel.TextSize = 11; NameLabel.TextXAlignment = 0
+        local data = Settings.Whitelist[player.Name] or {Whitelisted = false, Priority = false}
+        local PriBtn = Instance.new("TextButton", PlayerFrame); PriBtn.Size = UDim2.new(0, 70, 0, 25); PriBtn.Position = UDim2.new(1, -165, 0.5, -12); PriBtn.BackgroundColor3 = data.Priority and Settings.ESP_Config.PriorityColor or Color3.fromRGB(35, 35, 35); PriBtn.Text = "Priority"; PriBtn.TextColor3 = Color3.new(1,1,1); PriBtn.Font = Enum.Font.GothamBold; PriBtn.TextSize = 10; Instance.new("UICorner", PriBtn)
+        local WLBtn = Instance.new("TextButton", PlayerFrame); WLBtn.Size = UDim2.new(0, 80, 0, 25); WLBtn.Position = UDim2.new(1, -90, 0.5, -12); WLBtn.BackgroundColor3 = data.Whitelisted and Settings.ESP_Config.MainColor or Color3.fromRGB(35, 35, 35); WLBtn.Text = "Whitelist"; WLBtn.TextColor3 = Color3.new(1, 1, 1); WLBtn.Font = Enum.Font.GothamBold; WLBtn.TextSize = 10; Instance.new("UICorner", WLBtn)
+        WLBtn.MouseButton1Click:Connect(function() Settings.Whitelist[player.Name] = Settings.Whitelist[player.Name] or {Whitelisted = false, Priority = false}; Settings.Whitelist[player.Name].Whitelisted = not Settings.Whitelist[player.Name].Whitelisted; WLBtn.BackgroundColor3 = Settings.Whitelist[player.Name].Whitelisted and Settings.ESP_Config.MainColor or Color3.fromRGB(35, 35, 35) end)
+        PriBtn.MouseButton1Click:Connect(function() Settings.Whitelist[player.Name] = Settings.Whitelist[player.Name] or {Whitelisted = false, Priority = false}; Settings.Whitelist[player.Name].Priority = not Settings.Whitelist[player.Name].Priority; PriBtn.BackgroundColor3 = Settings.Whitelist[player.Name].Priority and Settings.ESP_Config.PriorityColor or Color3.fromRGB(35, 35, 35) end)
+    end
+end
+
+ClearBtn.MouseButton1Click:Connect(function() Settings.Whitelist = {}; UpdateWhitelistTab() end)
+SearchBox:GetPropertyChangedSignal("Text"):Connect(UpdateWhitelistTab)
+
+--// ESP SYSTEM //--
+local ESP_Cache = {}
+local function CreateESP(Player)
+    if Player == LocalPlayer then return end
+    local BGui = Instance.new("BillboardGui", Services.CoreGui); BGui.Adornee = nil; BGui.Size = UDim2.new(0, 200, 0, 120); BGui.AlwaysOnTop = true; BGui.ExtentsOffset = Vector3.new(0, 3, 0)
+    local NameL = Instance.new("TextLabel", BGui); NameL.Size = UDim2.new(1, 0, 0, 20); NameL.BackgroundTransparency = 1; NameL.TextColor3 = Color3.new(1,1,1); NameL.Font = Enum.Font.GothamBold; NameL.TextSize = 14; NameL.Visible = false
+    local GunL = Instance.new("TextLabel", BGui); GunL.Size = UDim2.new(1, 0, 0, 20); GunL.Position = UDim2.new(0,0,0,20); GunL.BackgroundTransparency = 1; GunL.TextColor3 = Color3.fromRGB(255, 200, 0); GunL.Font = Enum.Font.GothamBold; GunL.TextSize = 12; GunL.Visible = false
+    local SkeletonLines = {}; for i = 1, #SkeletonR15 do SkeletonLines[i] = CreateDrawing("Line", {Thickness = 1.5, Transparency = 1, Visible = false}) end
+    ESP_Cache[Player] = { C = {CreateDrawing("Line", {}), CreateDrawing("Line", {}), CreateDrawing("Line", {}), CreateDrawing("Line", {}), CreateDrawing("Line", {}), CreateDrawing("Line", {}), CreateDrawing("Line", {}), CreateDrawing("Line", {})}, Fill = CreateDrawing("Square", {Filled = true, Visible = false}), HealthBar = CreateDrawing("Line", {Thickness = 2, Visible = false}), Skeleton = SkeletonLines, NameTag = NameL, GunTag = GunL, Gui = BGui, Highlight = Instance.new("Highlight", Services.CoreGui) }
+end
+
+--// MAIN RENDER LOOP & ANTI-FLING //--
+Services.RunService.RenderStepped:Connect(function(dt)
+    if Settings.Watermark then
+        local fps = math.floor(1 / dt)
+        WatermarkText.Text = "Project Dot | FPS: " .. fps .. " | User: Noah"
+        WatermarkText.Visible = true; WatermarkText.Color = Settings.ESP_Config.MainColor
+    else WatermarkText.Visible = false end
+
+    local MouseLoc = Services.UserInputService:GetMouseLocation()
+    FOVCircle.Position = MouseLoc; FOVCircle.Color = Settings.FOVColor; FOVCircle.Radius = Settings.AimbotFOV
+    local target = GetClosestPlayer()
+    RadarBorder.Color = Settings.ESP_Config.MainColor
+    
+    if Settings.Aimbot and target and target.Character then
+        if Services.UserInputService:IsMouseButtonPressed(Enum.UserInputType.MouseButton2) then
+            local partName = Settings.AimPart == "Random" and "Head" or Settings.AimPart
+            local part = target.Character:FindFirstChild(partName); if part then local pos = Camera:WorldToViewportPoint(part.Position); mousemoverel((pos.X - MouseLoc.X)/Settings.AimbotSmoothing, (pos.Y - MouseLoc.Y)/Settings.AimbotSmoothing) end
+        end
+    end
+
+    -- Anti-Fling Collision Logic
+    if Settings.Bypass.AntiFling and LocalPlayer.Character then
+        for _, p in pairs(Services.Players:GetPlayers()) do
+            if p ~= LocalPlayer and p.Character and p.Character:FindFirstChild("HumanoidRootPart") then
+                p.Character.HumanoidRootPart.CanCollide = false
+            end
+        end
+    end
+
+    for Player, Obj in pairs(ESP_Cache) do
+        local Char = Player.Character; local Root = Char and Char:FindFirstChild("HumanoidRootPart"); local Hum = Char and Char:FindFirstChild("Humanoid")
+        if Settings.ESP.Radar and Root and LocalPlayer.Character and LocalPlayer.Character:FindFirstChild("HumanoidRootPart") then
+            local RelPos = Root.Position - LocalPlayer.Character.HumanoidRootPart.Position; local Dist = RelPos.Magnitude
+            if Dist <= Settings.ESP_Config.RadarRange then
+                local Dot = RadarDots[Player] or Instance.new("Frame", RadarFrame); local Line = RadarLines[Player] or Instance.new("Frame", Dot)
+                if not RadarDots[Player] then Dot.Size = UDim2.new(0, 4, 0, 4); Dot.AnchorPoint = Vector2.new(0.5, 0.5); Instance.new("UICorner", Dot); RadarDots[Player] = Dot; Line.Size = UDim2.new(0, 1, 0, 8); Line.AnchorPoint = Vector2.new(0.5, 1); Line.Position = UDim2.new(0.5, 0, 0.5, 0); Line.BorderSizePixel = 0; RadarLines[Player] = Line end
+                local _, CamYaw = Camera.CFrame:ToEulerAnglesYXZ(); local s, c = math.sin(CamYaw), math.cos(CamYaw); local rx = RelPos.X * c + RelPos.Z * s; local rz = RelPos.Z * c - RelPos.X * s
+                local px = (rx / Settings.ESP_Config.RadarRange) * (RadarFrame.AbsoluteSize.X / 2); local py = (rz / Settings.ESP_Config.RadarRange) * (RadarFrame.AbsoluteSize.Y / 2)
+                Dot.Position = UDim2.new(0.5, px, 0.5, py); Dot.BackgroundColor3 = (Settings.Whitelist[Player.Name] and Settings.Whitelist[Player.Name].Priority) and Settings.ESP_Config.PriorityColor or Settings.ESP_Config.MainColor; Dot.Visible = true
+                if Settings.ESP.FacingLines then local _, RootYaw = Root.CFrame:ToEulerAnglesYXZ(); Line.Rotation = math.deg(CamYaw - RootYaw); Line.BackgroundColor3 = Dot.BackgroundColor3; Line.Visible = true else Line.Visible = false end
+            elseif RadarDots[Player] then RadarDots[Player].Visible = false end
+        elseif RadarDots[Player] then RadarDots[Player].Visible = false end
+        if Root and Hum and Hum.Health > 0 then
+            local Pos, On = Camera:WorldToViewportPoint(Root.Position)
+            if On then
+                local pData = Settings.Whitelist[Player.Name]; local color = (pData and pData.Priority) and Settings.ESP_Config.PriorityColor or Settings.ESP_Config.MainColor
+                Obj.Gui.Adornee = Root; local tool = Char:FindFirstChildOfClass("Tool"); local dist = math.floor((Root.Position - LocalPlayer.Character.HumanoidRootPart.Position).Magnitude)
+                local nameStr = Player.Name; if Settings.ESP.Distance then nameStr = nameStr .. " [" .. dist .. "m]" end
+                Obj.NameTag.Visible = Settings.ESP.Names; Obj.NameTag.Text = nameStr; Obj.NameTag.TextColor3 = color; Obj.GunTag.Visible = Settings.ESP.Guns; Obj.GunTag.Text = tool and "["..tool.Name.."]" or "[Unarmed]"; Obj.Highlight.Enabled = Settings.ESP.Chams; Obj.Highlight.Adornee = Char; Obj.Highlight.FillColor = color
+                if Settings.ESP.Skeleton then for i, bone in pairs(SkeletonR15) do local p1, p2 = Char:FindFirstChild(bone[1]), Char:FindFirstChild(bone[2]); if p1 and p2 then local v1, o1 = Camera:WorldToViewportPoint(p1.Position); local v2, o2 = Camera:WorldToViewportPoint(p2.Position); if o1 and o2 then Obj.Skeleton[i].Visible = true; Obj.Skeleton[i].From = Vector2.new(v1.X, v1.Y); Obj.Skeleton[i].To = Vector2.new(v2.X, v2.Y); Obj.Skeleton[i].Color = color else Obj.Skeleton[i].Visible = false end end end else for _, v in pairs(Obj.Skeleton) do v.Visible = false end end
+                if Settings.ESP.Boxes or Settings.ESP.BoxFill or Settings.ESP.Health then
+                    local SizeX, SizeY = 2000/Pos.Z, 3000/Pos.Z; local BoxPos = Vector2.new(Pos.X - SizeX/2, Pos.Y - SizeY/2); Obj.Fill.Visible = Settings.ESP.BoxFill; Obj.Fill.Position = BoxPos; Obj.Fill.Size = Vector2.new(SizeX, SizeY); Obj.Fill.Color = color; Obj.Fill.Transparency = Settings.ESP_Config.FillTransparency
+                    if Settings.ESP.Boxes then local l = SizeX/4; for i, v in pairs(Obj.C) do v.Color = color; v.Thickness = 1.5; v.Visible = true end; Obj.C[1].From = BoxPos; Obj.C[1].To = BoxPos + Vector2.new(l, 0); Obj.C[2].From = BoxPos; Obj.C[2].To = BoxPos + Vector2.new(0, l); Obj.C[3].From = BoxPos + Vector2.new(SizeX, 0); Obj.C[3].To = BoxPos + Vector2.new(SizeX - l, 0); Obj.C[4].From = BoxPos + Vector2.new(SizeX, 0); Obj.C[4].To = BoxPos + Vector2.new(SizeX, l); Obj.C[5].From = BoxPos + Vector2.new(0, SizeY); Obj.C[5].To = BoxPos + Vector2.new(l, SizeY); Obj.C[6].From = BoxPos + Vector2.new(0, SizeY); Obj.C[6].To = BoxPos + Vector2.new(0, SizeY - l); Obj.C[7].From = BoxPos + Vector2.new(SizeX, SizeY); Obj.C[7].To = BoxPos + Vector2.new(SizeX - l, SizeY); Obj.C[8].From = BoxPos + Vector2.new(SizeX, SizeY); Obj.C[8].To = BoxPos + Vector2.new(SizeX, SizeY - l) else for _, v in pairs(Obj.C) do v.Visible = false end end
+                    if Settings.ESP.Health then local hH = (Hum.Health/Hum.MaxHealth) * SizeY; Obj.HealthBar.From = BoxPos - Vector2.new(5, 0); Obj.HealthBar.To = BoxPos - Vector2.new(5, -hH); Obj.HealthBar.Color = Color3.fromHSV(Hum.Health/Hum.MaxHealth * 0.3, 1, 1); Obj.HealthBar.Visible = true else Obj.HealthBar.Visible = false end
+                end continue
+            end
+        end
+        Obj.Gui.Adornee = nil; Obj.NameTag.Visible = false; Obj.GunTag.Visible = false; Obj.Highlight.Enabled = false; Obj.Fill.Visible = false; Obj.HealthBar.Visible = false; for _, v in pairs(Obj.C) do v.Visible = false end; for _, v in pairs(Obj.Skeleton) do v.Visible = false end
+    end
+end)
+
+--// INITIALIZE //--
+CreateTabBtn("COMBAT", Tabs.Combat); CreateTabBtn("VISUALS", Tabs.Visuals); CreateTabBtn("WHITELIST", Tabs.Whitelist); CreateTabBtn("BYPASS", Tabs.Bypass); CreateTabBtn("CUSTOMIZE", Tabs.Customize)
+
+-- Visuals Tab
+AddToggle(Tabs.Visuals, "Corner Boxes", false, function(v) Settings.ESP.Boxes = v end); AddToggle(Tabs.Visuals, "Box Fills", false, function(v) Settings.ESP.BoxFill = v end); AddToggle(Tabs.Visuals, "Skeleton", false, function(v) Settings.ESP.Skeleton = v end); AddToggle(Tabs.Visuals, "Player Names", false, function(v) Settings.ESP.Names = v end); AddToggle(Tabs.Visuals, "Distance ESP", false, function(v) Settings.ESP.Distance = v end); AddToggle(Tabs.Visuals, "Gun ESP", false, function(v) Settings.ESP.Guns = v end); AddToggle(Tabs.Visuals, "Health Bar", false, function(v) Settings.ESP.Health = v end); AddToggle(Tabs.Visuals, "Chams (Glow)", false, function(v) Settings.ESP.Chams = v end)
+AddToggle(Tabs.Visuals, "Player Radar", false, function(v) Settings.ESP.Radar = v; RadarFrame.Visible = v end); AddToggle(Tabs.Visuals, "Facing Lines", false, function(v) Settings.ESP.FacingLines = v end); AddSlider(Tabs.Visuals, "Radar Range", 50, 1000, 250, function(v) Settings.ESP_Config.RadarRange = v end)
+
+-- Combat Tab
+AddToggle(Tabs.Combat, "Enable Aimbot", false, function(v) Settings.Aimbot = v; FOVCircle.Visible = v end); AddToggle(Tabs.Combat, "Triggerbot", false, function(v) Settings.Triggerbot = v end); AddSelector(Tabs.Combat, "Aim Part", {"Head", "HumanoidRootPart", "Random"}, "Head", function(v) Settings.AimPart = v end); AddToggle(Tabs.Combat, "Target Snapline", false, function(v) Settings.ESP.TargetLine = v end); AddSlider(Tabs.Combat, "Aimbot FOV", 50, 800, 150, function(v) Settings.AimbotFOV = v end); AddSlider(Tabs.Combat, "Smoothing", 1, 15, 3, function(v) Settings.AimbotSmoothing = v end)
+
+-- Bypass Tab
+AddToggle(Tabs.Bypass, "Name Spoofer", false, function(v) Settings.Bypass.SpoofName = v; ToggleNameSpoof(v) end)
+AddToggle(Tabs.Bypass, "Invisible Bypass", false, function(v) Settings.Bypass.Invisible = v end)
+AddToggle(Tabs.Bypass, "Anti-Kick Bypass", false, function(v) Settings.Bypass.AntiKick = v end)
+AddToggle(Tabs.Bypass, "Anti-Fling", false, function(v) Settings.Bypass.AntiFling = v end)
+AddToggle(Tabs.Bypass, "Anti-AFK", false, function(v) Settings.Bypass.AntiAFK = v end)
+AddToggle(Tabs.Bypass, "Chat Bypass", false, function(v) Settings.Bypass.ChatBypass = v end)
+AddToggle(Tabs.Bypass, "Auto Re-Execute (Server Hop)", false, function(v) Settings.Bypass.ServerHopPersist = v; HandleServerHop(v) end)
+
+-- Customize Tab
+AddToggle(Tabs.Customize, "Show Watermark", true, function(v) Settings.Watermark = v end); AddSlider(Tabs.Customize, "Fill Transparency", 0, 1, 0.4, function(v) Settings.ESP_Config.FillTransparency = v end); AddColorPicker(Tabs.Customize, "Main Color", Settings.ESP_Config.MainColor, function(v) Settings.ESP_Config.MainColor = v end); AddColorPicker(Tabs.Customize, "Priority Color", Settings.ESP_Config.PriorityColor, function(v) Settings.ESP_Config.PriorityColor = v end); AddColorPicker(Tabs.Customize, "FOV Color", Settings.FOVColor, function(v) Settings.FOVColor = v end); AddButton(Tabs.Customize, "Save Config", SaveConfig); AddButton(Tabs.Customize, "Load Config", LoadConfig)
+
+for _, p in pairs(Services.Players:GetPlayers()) do CreateESP(p) end
+Services.Players.PlayerAdded:Connect(function(p) CreateESP(p); UpdateWhitelistTab() end); Services.Players.PlayerRemoving:Connect(UpdateWhitelistTab); UpdateWhitelistTab()
+Services.UserInputService.InputBegan:Connect(function(i, g) if not g and i.KeyCode == Settings.MenuKey then MainFrame.Visible = not MainFrame.Visible end end)
